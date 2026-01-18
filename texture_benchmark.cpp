@@ -13,6 +13,7 @@
 #include <sys/resource.h>
 #include <unistd.h>
 #include <set>
+#include <mutex>
 
 // DirectStorage-inspired benchmark with Vulkan optimizations
 // Key improvements:
@@ -83,6 +84,7 @@ private:
     uint32_t transferFamily = UINT32_MAX;
 
     std::vector<BenchmarkMetrics> allMetrics;
+    std::mutex transferMutex;  // Protects transferCommandPool and transferQueue for thread safety
 
     // Benchmark configuration
     const std::vector<uint32_t> stagingBufferSizes = {1, 2, 4, 8, 16, 32, 64}; // MB
@@ -515,6 +517,7 @@ private:
     }
 
     VkCommandBuffer beginSingleTimeCommands() {
+        std::lock_guard<std::mutex> lock(transferMutex);
         VkCommandBufferAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -533,6 +536,7 @@ private:
     }
 
     void endSingleTimeCommands(VkCommandBuffer commandBuffer) {
+        std::lock_guard<std::mutex> lock(transferMutex);
         vkEndCommandBuffer(commandBuffer);
 
         VkSubmitInfo submitInfo{};
