@@ -10,17 +10,11 @@ find_package(Vulkan REQUIRED)
 # Find GLFW
 find_package(glfw3 REQUIRED)
 
-# Add executables
+# Add executable
 add_executable(texture_benchmark texture_benchmark.cpp)
-add_executable(texture_benchmark_advanced texture_benchmark_advanced.cpp)
 
 # Link libraries
 target_link_libraries(texture_benchmark
-    Vulkan::Vulkan
-    glfw
-)
-
-target_link_libraries(texture_benchmark_advanced
     Vulkan::Vulkan
     glfw
     pthread
@@ -55,4 +49,3 @@ add_custom_target(shaders DEPENDS
 )
 
 add_dependencies(texture_benchmark shaders)
-add_dependencies(texture_benchmark_advanced shaders)

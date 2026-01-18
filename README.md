@@ -1,33 +1,24 @@
-# Vulkan Texture Loading Benchmark
+# Vulkan Texture Benchmark - Advanced
 
-A comprehensive Vulkan benchmark tool to measure and demonstrate texture loading performance from filesystem to GPU memory. Ideal for benchmarking high-performance filesystems with AMD Radeon GPUs.
+A DirectStorage-inspired Vulkan texture benchmark that measures GPU texture upload performance with various configurations. Supports both headless and windowed modes.
 
 ## Features
 
-- **Precise Timing Instrumentation**: Separates file I/O time from GPU upload time
-- **Multiple Texture Sizes**: Tests with 2K, 4K, and 8K textures
-- **Visual Display**: Renders loaded textures for visual verification
-- **Detailed Metrics**: Reports throughput (MB/s), individual timings, and aggregated results
-- **Real-world Workflow**: Uses Vulkan staging buffers for optimal CPU→GPU transfer
+- **DirectStorage-inspired optimizations**: Parallel/bulk texture loading
+- **Multiple staging buffer sizes**: Tests with 1MB to 64MB staging buffers
+- **Queue depth testing**: Measures parallel upload performance (1, 4, 8, 16 concurrent operations)
+- **Texture size scaling**: Benchmarks 2K, 4K, and 8K textures
+- **CPU usage tracking**: Monitors CPU time during uploads
+- **Bandwidth measurement**: Reports transfer speeds in GB/s
+- **Dual mode operation**: Run with or without a window (--headless flag)
 
 ## Requirements
 
-### System Requirements
-- Vulkan-capable GPU (AMD Radeon recommended)
-- Vulkan SDK installed
-- Linux system with X11 or Wayland
-
-### Build Dependencies
-```bash
-# Ubuntu/Debian
-sudo apt install build-essential cmake libvulkan-dev glslang-tools libglfw3-dev
-
-# Fedora
-sudo dnf install cmake vulkan-devel glslang glfw-devel
-
-# Arch Linux
-sudo pacman -S cmake vulkan-devel glslang glfw-x11
-```
+- Vulkan SDK
+- GLFW3
+- CMake 3.10+
+- C++17 compatible compiler
+- glslangValidator (for shader compilation)
 
 ## Building
 
@@ -38,140 +29,108 @@ cmake ..
 make
 ```
 
-The build system automatically compiles GLSL shaders to SPIR-V during the build process.
-
-### Manual Shader Compilation (Optional)
-If you need to compile shaders manually:
-```bash
-glslangValidator -V shader.vert -o shader.vert.spv
-glslangValidator -V shader.frag -o shader.frag.spv
-```
+This will compile the shaders and build the `texture_benchmark` executable.
 
 ## Usage
 
-### Basic Execution
+### Windowed Mode (Default)
 ```bash
-cd build
 ./texture_benchmark
 ```
 
-### What It Does
-1. Initializes Vulkan rendering context
-2. Generates 10 test textures (2K, 4K, 8K sizes)
-3. Loads each texture with precise timing:
-   - **Read Time**: File I/O from disk to RAM
-   - **Upload Time**: CPU RAM to GPU VRAM transfer
-4. Displays timing table with throughput metrics
-5. Opens window showing loaded textures (press SPACE to cycle, ESC to exit)
+Creates a window and runs the benchmark. The window shows "Vulkan Texture Benchmark" while the tests run.
 
-### Sample Output
-```
-=== Starting Texture Load Benchmark ===
-Using GPU: AMD Radeon RX 7900 XTX
-
-Loaded texture_2048_0.raw: 12.34 ms (1245.67 MB/s)
-Loaded texture_4096_1.raw: 45.67 ms (1456.78 MB/s)
-...
-
-=== Benchmark Results ===
-Texture                    | Read (ms) | Upload (ms) | Total (ms) | Size (MB) | Throughput (MB/s)
----------------------------|-----------|-------------|------------|-----------|------------------
-texture_2048_0.raw         |      4.23 |        8.11 |      12.34 |     16.00 |          1296.10
-texture_4096_1.raw         |     15.34 |       30.33 |      45.67 |     64.00 |          1401.58
-...
----------------------------|-----------|-------------|------------|-----------|------------------
-TOTAL                      |           |             |     234.56 |    320.00 |          1364.21
-```
-
-## Benchmarking Your Filesystem
-
-### Testing Standard Filesystem
+### Headless Mode
 ```bash
-cd build
-./texture_benchmark
-# Note the throughput values
+./texture_benchmark --headless
 ```
 
-### Testing Your Fast Filesystem
-Mount your custom filesystem and modify the texture generation location in the code, or:
-```bash
-# Create symbolic link to your fast filesystem
-cd build
-ln -s /path/to/your/fast/fs ./fast_storage
-# Modify texture paths in code to use ./fast_storage/
+Runs without creating a window. Ideal for:
+- Server environments
+- Automated testing
+- CI/CD pipelines
+- Systems without display
+
+## Benchmark Tests
+
+The benchmark runs three test suites:
+
+### Test 1: Staging Buffer Size Impact
+- Tests a single 4K texture with varying staging buffer sizes (1-64MB)
+- Measures how staging buffer size affects upload performance
+- Helps identify optimal buffer size for your GPU
+
+### Test 2: Queue Depth Impact
+- Tests multiple 2K textures loaded in parallel (16MB staging buffer)
+- Varies queue depth from 1 to 16 concurrent operations
+- Demonstrates parallel upload scaling
+
+### Test 3: Texture Size Scaling
+- Tests different texture resolutions (2K, 4K, 8K)
+- Uses 32MB staging buffer and single queue depth
+- Shows how performance scales with texture size
+
+## Output
+
+The benchmark displays:
+
+**GPU Information:**
+```
+=== GPU Information ===
+Mode: Headless/Windowed
+Device: [GPU Name]
+API Version: [Vulkan Version]
+VRAM: [Memory in MB]
+Transfer Queue Family: [Queue Index]
+Graphics Queue Family: [Queue Index]
 ```
 
-### Comparing Results
-Compare the "Throughput (MB/s)" column, specifically:
-- **Read (ms)**: Shows filesystem read performance
-- **Upload (ms)**: Shows PCIe/GPU memory bandwidth (constant across filesystems)
-- **Total Throughput**: Overall data pipeline efficiency
-
-## Customization
-
-### Modify Texture Count and Sizes
-Edit `texture_benchmark.cpp`:
-```cpp
-// In loadTestTextures() function
-const int numTextures = 20;  // Change number of textures
-const std::vector<uint32_t> sizes = {2048, 4096, 8192, 16384};  // Add 16K textures
+**Benchmark Results:**
+```
+Test Name              | Staging | Queue | Total (ms) | Bandwidth (GB/s) | CPU (ms) | Size (MB)
+-----------------------|---------|-------|------------|------------------|----------|----------
+4096x4096              |     1MB |     1 |      XX.XX |            X.XXX |    XX.XX |    XX.XX
+...
 ```
 
-### Use Real Texture Files
-Replace `generateTestTexture()` calls with actual image loading:
-```cpp
-// Use stb_image or similar library to load PNG/JPG files
-// Ensure format is RGBA 8-bit
+**Summary:**
+```
+=== Key Findings ===
+Peak Bandwidth: X.XXX GB/s
+Minimum CPU Time: XX.XX ms
 ```
 
-### Adjust Window Resolution
-```cpp
-// In initWindow()
-window = glfwCreateWindow(3840, 2160, "...", nullptr, nullptr);  // 4K display
-```
+## Architecture
 
-## Technical Details
+The benchmark uses:
+- **Dedicated transfer queue**: Optimized GPU upload path
+- **Staging buffers**: Host-visible memory for CPU-to-GPU transfers
+- **Optimal image tiling**: GPU-optimized texture layout
+- **Parallel uploads**: Multi-threaded texture loading
+- **CPU profiling**: Resource usage tracking via getrusage()
 
-### Texture Format
-- **Format**: R8G8B8A8_UNORM (32-bit RGBA)
-- **Channel Layout**: Red, Green, Blue, Alpha (8 bits each)
-- **Memory Layout**: Tightly packed, row-major
+## Performance Tips
 
-### Vulkan Pipeline
-1. **Staging Buffer**: Host-visible memory for CPU writes
-2. **Device-Local Image**: GPU-optimal memory for rendering
-3. **Transfer Operations**: Vulkan command buffer transfers
-4. **Sampler**: Linear filtering, anisotropic filtering enabled
+1. **Staging buffer size**: Larger buffers (16-64MB) typically perform better
+2. **Queue depth**: Higher parallelism improves throughput on modern GPUs
+3. **Headless mode**: Slightly better performance without window overhead
+4. **Transfer queue**: Dedicated transfer queue reduces graphics queue contention
 
-### Timing Methodology
-- Uses `std::chrono::high_resolution_clock`
-- Measures wall-clock time (includes OS overhead)
-- File reads use standard C++ `ifstream` (modify for `read()` syscalls if needed)
-- GPU uploads include all Vulkan synchronization overhead
+## Files
 
-## Troubleshooting
+- `texture_benchmark.cpp`: Main benchmark implementation
+- `shader.vert`: Vertex shader (for windowed mode)
+- `shader.frag`: Fragment shader (for windowed mode)
+- `CMakeLists.txt`: Build configuration
+- `compile_shaders.sh`: Manual shader compilation script
 
-### "Failed to find GPUs with Vulkan support"
-- Install Vulkan drivers: `sudo apt install mesa-vulkan-drivers` (Mesa) or AMD proprietary drivers
-- Verify: `vulkaninfo | grep deviceName`
+## Notes
 
-### "Failed to open file: shader.vert.spv"
-- Run from build directory: `cd build && ./texture_benchmark`
-- Or compile shaders manually to current directory
-
-### Window doesn't appear
-- Check display server: `echo $DISPLAY`
-- For Wayland: may need `GLFW_PLATFORM=wayland` environment variable
-
-### Low throughput numbers
-- Check CPU frequency scaling: `cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor`
-- Set performance mode: `sudo cpupower frequency-set -g performance`
-- Monitor GPU clocks: `sudo radeontop` or `watch -n1 cat /sys/class/drm/card0/device/pp_dpm_sclk`
+- The benchmark generates random texture data to simulate real-world loading
+- Textures are uploaded and immediately freed (no rendering in current version)
+- Results may vary based on GPU, driver version, and system load
+- Run the benchmark multiple times and average results for consistency
 
 ## License
 
-Public domain / MIT - use freely for benchmarking and testing.
-
-## Contributing
-
-This is a standalone benchmark tool. Modify as needed for your specific use case.
+See LICENSE file for details.
