@@ -1,3 +1,25 @@
+/*
+ * Vulkan Model Viewer
+ *
+ * A high-performance 3D model viewer using Vulkan API for rendering.
+ * Designed to handle large models like Stanford Lucy (28M+ triangles).
+ *
+ * Features:
+ * - OBJ model loading with tinyobjloader
+ * - Vertex deduplication for memory efficiency
+ * - Automatic normal generation for models without normals
+ * - Three-point lighting system (key, fill, rim)
+ * - Real-time camera rotation
+ * - Performance metrics display
+ *
+ * Architecture:
+ * - Vulkan 1.2 graphics pipeline
+ * - Staging buffers for efficient GPU upload
+ * - Double buffering (2 frames in flight)
+ * - Depth testing for correct rendering
+ * - Descriptor sets for uniform buffer binding
+ */
+
 #include <vulkan/vulkan.h>
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -5,8 +27,8 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <tiny_obj_loader.h>
 
-#define GLM_FORCE_RADIANS
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#define GLM_FORCE_RADIANS          // Use radians for GLM functions
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE // Use Vulkan depth range [0, 1]
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -21,57 +43,90 @@
 #include <array>
 #include <algorithm>
 
-// Vulkan Model Viewer - Loads and displays large OBJ models like Stanford Lucy
-
+/**
+ * Vertex structure representing a single point in the 3D model
+ * Contains position, normal, and color information
+ * Size: 36 bytes (3 vec3s * 4 bytes/float * 3 floats/vec3)
+ */
 struct Vertex {
-    glm::vec3 pos;
-    glm::vec3 normal;
-    glm::vec3 color;
+    glm::vec3 pos;      // Vertex position in model space
+    glm::vec3 normal;   // Surface normal for lighting calculations
+    glm::vec3 color;    // Per-vertex color (material color)
 
+    /**
+     * Describes how vertex data is bound to the vertex buffer
+     * @return Binding description for vertex input
+     */
     static VkVertexInputBindingDescription getBindingDescription() {
         VkVertexInputBindingDescription bindingDescription{};
-        bindingDescription.binding = 0;
-        bindingDescription.stride = sizeof(Vertex);
-        bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+        bindingDescription.binding = 0;                          // Binding index
+        bindingDescription.stride = sizeof(Vertex);              // Bytes between consecutive vertices
+        bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX; // Per-vertex data
         return bindingDescription;
     }
 
+    /**
+     * Describes the vertex attributes (position, normal, color)
+     * Maps vertex data to shader input locations
+     * @return Array of attribute descriptions
+     */
     static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions() {
         std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
 
+        // Position attribute (location = 0 in vertex shader)
         attributeDescriptions[0].binding = 0;
         attributeDescriptions[0].location = 0;
-        attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+        attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT; // vec3
         attributeDescriptions[0].offset = offsetof(Vertex, pos);
 
+        // Normal attribute (location = 1 in vertex shader)
         attributeDescriptions[1].binding = 0;
         attributeDescriptions[1].location = 1;
-        attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+        attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT; // vec3
         attributeDescriptions[1].offset = offsetof(Vertex, normal);
 
+        // Color attribute (location = 2 in vertex shader)
         attributeDescriptions[2].binding = 0;
         attributeDescriptions[2].location = 2;
-        attributeDescriptions[2].format = VK_FORMAT_R32G32B32_SFLOAT;
+        attributeDescriptions[2].format = VK_FORMAT_R32G32B32_SFLOAT; // vec3
         attributeDescriptions[2].offset = offsetof(Vertex, color);
 
         return attributeDescriptions;
     }
 
+    /**
+     * Equality operator for vertex deduplication
+     * Used in unordered_map to find duplicate vertices
+     */
     bool operator==(const Vertex& other) const {
         return pos == other.pos && normal == other.normal && color == other.color;
     }
 };
 
+/**
+ * Hash function specializations for vertex deduplication
+ * Allows Vertex and glm::vec3 to be used as keys in unordered_map
+ */
 namespace std {
+    /**
+     * Hash function for glm::vec3
+     * Combines hashes of x, y, z components using bit shifts and XOR
+     */
     template<> struct hash<glm::vec3> {
         size_t operator()(glm::vec3 const& vec) const {
             size_t h1 = hash<float>()(vec.x);
             size_t h2 = hash<float>()(vec.y);
             size_t h3 = hash<float>()(vec.z);
+            // Combine hashes to minimize collisions
             return ((h1 ^ (h2 << 1)) >> 1) ^ (h3 << 1);
         }
     };
 
+    /**
+     * Hash function for Vertex
+     * Enables vertex deduplication to reduce memory usage
+     * On average, each vertex is shared by ~6 triangles
+     */
     template<> struct hash<Vertex> {
         size_t operator()(Vertex const& vertex) const {
             return ((hash<glm::vec3>()(vertex.pos) ^
@@ -81,110 +136,152 @@ namespace std {
     };
 }
 
+/**
+ * Uniform Buffer Object for MVP matrices
+ * Passed to vertex shader for coordinate transformations
+ * Must be aligned to 16 bytes for GPU compatibility
+ */
 struct UniformBufferObject {
-    alignas(16) glm::mat4 model;
-    alignas(16) glm::mat4 view;
-    alignas(16) glm::mat4 proj;
+    alignas(16) glm::mat4 model;  // Model matrix (object -> world space)
+    alignas(16) glm::mat4 view;   // View matrix (world -> camera space)
+    alignas(16) glm::mat4 proj;   // Projection matrix (camera -> clip space)
 };
 
+/**
+ * Main Vulkan Model Viewer class
+ * Manages the entire Vulkan rendering pipeline and model display
+ */
 class VulkanModelViewer {
 private:
-    GLFWwindow* window;
-    VkInstance instance;
-    VkSurfaceKHR surface;
-    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
-    VkDevice device;
-    VkQueue graphicsQueue;
-    VkQueue presentQueue;
-    VkSwapchainKHR swapChain;
-    std::vector<VkImage> swapChainImages;
-    VkFormat swapChainImageFormat;
-    VkExtent2D swapChainExtent;
-    std::vector<VkImageView> swapChainImageViews;
-    VkRenderPass renderPass;
-    VkDescriptorSetLayout descriptorSetLayout;
-    VkPipelineLayout pipelineLayout;
-    VkPipeline graphicsPipeline;
-    std::vector<VkFramebuffer> swapChainFramebuffers;
-    VkCommandPool commandPool;
-    std::vector<VkCommandBuffer> commandBuffers;
-    std::vector<VkSemaphore> imageAvailableSemaphores;
-    std::vector<VkSemaphore> renderFinishedSemaphores;
-    std::vector<VkFence> inFlightFences;
+    // ==== Window and Surface ====
+    GLFWwindow* window;           // GLFW window for rendering
+    VkInstance instance;          // Vulkan instance (connection to Vulkan library)
+    VkSurfaceKHR surface;         // Window surface for presenting rendered images
 
-    VkBuffer vertexBuffer;
-    VkDeviceMemory vertexBufferMemory;
-    VkBuffer indexBuffer;
-    VkDeviceMemory indexBufferMemory;
+    // ==== Device and Queues ====
+    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE; // GPU to use for rendering
+    VkDevice device;                                   // Logical device interface to GPU
+    VkQueue graphicsQueue;                             // Queue for graphics commands
+    VkQueue presentQueue;                              // Queue for presenting to screen
 
-    std::vector<VkBuffer> uniformBuffers;
-    std::vector<VkDeviceMemory> uniformBuffersMemory;
-    std::vector<void*> uniformBuffersMapped;
+    // ==== Swap Chain (manages frame buffers for presentation) ====
+    VkSwapchainKHR swapChain;     // Swap chain for double/triple buffering
+    std::vector<VkImage> swapChainImages;  // Images in the swap chain
+    VkFormat swapChainImageFormat;              // Format of swap chain images (e.g., B8G8R8A8)
+    VkExtent2D swapChainExtent;                 // Resolution of swap chain images
+    std::vector<VkImageView> swapChainImageViews; // Views into swap chain images
 
-    VkDescriptorPool descriptorPool;
-    std::vector<VkDescriptorSet> descriptorSets;
+    // ==== Graphics Pipeline ====
+    VkRenderPass renderPass;                    // Describes rendering operations
+    VkDescriptorSetLayout descriptorSetLayout;  // Layout of descriptor sets (uniforms)
+    VkPipelineLayout pipelineLayout;            // Layout of the graphics pipeline
+    VkPipeline graphicsPipeline;                // Configured graphics pipeline
+    std::vector<VkFramebuffer> swapChainFramebuffers; // Framebuffers for each swap chain image
 
-    VkImage depthImage;
-    VkDeviceMemory depthImageMemory;
-    VkImageView depthImageView;
+    // ==== Command Buffers ====
+    VkCommandPool commandPool;                  // Pool for allocating command buffers
+    std::vector<VkCommandBuffer> commandBuffers; // Command buffers (one per frame in flight)
 
-    uint32_t graphicsFamily = UINT32_MAX;
-    uint32_t presentFamily = UINT32_MAX;
+    // ==== Synchronization (prevents race conditions) ====
+    std::vector<VkSemaphore> imageAvailableSemaphores; // Signal when image is ready to render
+    std::vector<VkSemaphore> renderFinishedSemaphores; // Signal when rendering is complete
+    std::vector<VkFence> inFlightFences;               // CPU-GPU synchronization
 
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
+    // ==== Model Buffers ====
+    VkBuffer vertexBuffer;                      // GPU buffer for vertex data
+    VkDeviceMemory vertexBufferMemory;          // Memory backing the vertex buffer
+    VkBuffer indexBuffer;                       // GPU buffer for index data
+    VkDeviceMemory indexBufferMemory;           // Memory backing the index buffer
 
-    const int MAX_FRAMES_IN_FLIGHT = 2;
-    uint32_t currentFrame = 0;
+    // ==== Uniform Buffers (MVP matrices) ====
+    std::vector<VkBuffer> uniformBuffers;       // One per frame in flight
+    std::vector<VkDeviceMemory> uniformBuffersMemory; // Memory for uniform buffers
+    std::vector<void*> uniformBuffersMapped;    // Persistently mapped uniform buffer pointers
 
-    const int WIDTH = 1024;
-    const int HEIGHT = 768;
+    // ==== Descriptor Sets (bind uniforms to shaders) ====
+    VkDescriptorPool descriptorPool;            // Pool for allocating descriptor sets
+    std::vector<VkDescriptorSet> descriptorSets; // Descriptor sets (one per frame)
 
-    float cameraDistance = 3.0f;
-    float cameraAngle = 0.0f;
+    // ==== Depth Buffer (for correct occlusion) ====
+    VkImage depthImage;                         // Depth image for depth testing
+    VkDeviceMemory depthImageMemory;            // Memory backing depth image
+    VkImageView depthImageView;                 // View into depth image
 
-    // Model loading stats
-    float modelLoadTime = 0.0f;
-    size_t modelVertexCount = 0;
-    size_t modelTriangleCount = 0;
+    // ==== Queue Family Indices ====
+    uint32_t graphicsFamily = UINT32_MAX;       // Index of graphics queue family
+    uint32_t presentFamily = UINT32_MAX;        // Index of present queue family
+
+    // ==== Model Data ====
+    std::vector<Vertex> vertices;               // CPU-side vertex data
+    std::vector<uint32_t> indices;              // CPU-side index data
+
+    // ==== Rendering Configuration ====
+    const int MAX_FRAMES_IN_FLIGHT = 2;         // Double buffering (prevents CPU waiting for GPU)
+    uint32_t currentFrame = 0;                  // Current frame index (0 or 1)
+
+    const int WIDTH = 1024;                     // Window width
+    const int HEIGHT = 768;                     // Window height
+
+    // ==== Camera State ====
+    float cameraDistance = 3.0f;                // Distance from origin
+    float cameraAngle = 0.0f;                   // Rotation angle around model
+
+    // ==== Performance Metrics ====
+    float modelLoadTime = 0.0f;                 // Time to load model (ms)
+    size_t modelVertexCount = 0;                // Number of vertices loaded
+    size_t modelTriangleCount = 0;              // Number of triangles loaded
 
 public:
+    /**
+     * Main entry point for the application
+     * Initializes Vulkan, loads the model, and runs the render loop
+     * @param modelPath Path to the OBJ file to load
+     */
     void run(const std::string& modelPath) {
-        initWindow();
-        initVulkan();
-        loadModel(modelPath);
-        createVertexBuffer();
-        createIndexBuffer();
-        createUniformBuffers();
-        createDescriptorPool();
-        createDescriptorSets();
-        createCommandBuffers();
-        mainLoop();
-        cleanup();
+        initWindow();           // Create GLFW window
+        initVulkan();          // Initialize Vulkan pipeline
+        loadModel(modelPath);  // Load OBJ file and deduplicate vertices
+        createVertexBuffer();  // Upload vertices to GPU
+        createIndexBuffer();   // Upload indices to GPU
+        createUniformBuffers();// Create MVP matrix buffers
+        createDescriptorPool();// Create pool for descriptor sets
+        createDescriptorSets();// Bind uniform buffers to shaders
+        createCommandBuffers();// Allocate command buffers
+        mainLoop();            // Render loop (until window closes)
+        cleanup();             // Free all Vulkan resources
     }
 
 private:
+    /**
+     * Initialize GLFW window
+     * Creates a 1024x768 non-resizable window for Vulkan rendering
+     */
     void initWindow() {
         glfwInit();
-        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // Don't create OpenGL context
+        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);     // Fixed size window
         window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan Model Viewer", nullptr, nullptr);
     }
 
+    /**
+     * Initialize the Vulkan rendering pipeline
+     * Creates all necessary Vulkan objects in the correct order
+     * Order matters! Each step depends on previous steps
+     */
     void initVulkan() {
-        createInstance();
-        createSurface();
-        pickPhysicalDevice();
-        createLogicalDevice();
-        createSwapChain();
-        createImageViews();
-        createRenderPass();
-        createDescriptorSetLayout();
-        createGraphicsPipeline();
-        createDepthResources();
-        createFramebuffers();
-        createCommandPool();
-        createSyncObjects();
+        createInstance();          // Create Vulkan instance
+        createSurface();           // Create window surface
+        pickPhysicalDevice();      // Select GPU to use
+        createLogicalDevice();     // Create logical device interface
+        createSwapChain();         // Create swap chain for presentation
+        createImageViews();        // Create views into swap chain images
+        createRenderPass();        // Define render pass structure
+        createDescriptorSetLayout();// Define uniform buffer layout
+        createGraphicsPipeline();  // Compile and configure graphics pipeline
+        createDepthResources();    // Create depth buffer
+        createFramebuffers();      // Create framebuffers for rendering
+        createCommandPool();       // Create command pool
+        createSyncObjects();       // Create semaphores and fences
     }
 
     void createInstance() {
@@ -641,9 +738,22 @@ private:
         }
     }
 
+    /**
+     * Load OBJ model from disk and prepare for rendering
+     *
+     * Process:
+     * 1. Parse OBJ file using tinyobjloader
+     * 2. Extract vertex positions, normals, and create indices
+     * 3. Deduplicate vertices (average model: ~6 triangles share each vertex)
+     * 4. Generate normals if model doesn't have them
+     * 5. Update window title with loading statistics
+     *
+     * @param modelPath Path to OBJ file
+     */
     void loadModel(const std::string& modelPath) {
         auto startTime = std::chrono::high_resolution_clock::now();
 
+        // Parse OBJ file
         tinyobj::attrib_t attrib;
         std::vector<tinyobj::shape_t> shapes;
         std::vector<tinyobj::material_t> materials;
@@ -655,18 +765,23 @@ private:
             throw std::runtime_error("Failed to load model: " + warn + err);
         }
 
+        // Hash map for vertex deduplication
+        // Key: Vertex, Value: index in vertices array
         std::unordered_map<Vertex, uint32_t> uniqueVertices{};
 
+        // Process all shapes and faces
         for (const auto& shape : shapes) {
             for (const auto& index : shape.mesh.indices) {
                 Vertex vertex{};
 
+                // Extract position (always present in OBJ)
                 vertex.pos = {
                     attrib.vertices[3 * index.vertex_index + 0],
                     attrib.vertices[3 * index.vertex_index + 1],
                     attrib.vertices[3 * index.vertex_index + 2]
                 };
 
+                // Extract normal if present
                 if (index.normal_index >= 0) {
                     vertex.normal = {
                         attrib.normals[3 * index.normal_index + 0],
@@ -674,16 +789,20 @@ private:
                         attrib.normals[3 * index.normal_index + 2]
                     };
                 } else {
+                    // Default normal pointing up (will be replaced if model has no normals)
                     vertex.normal = {0.0f, 1.0f, 0.0f};
                 }
 
-                vertex.color = {0.9f, 0.7f, 0.5f}; // Warm beige color instead of gray
+                // Set base material color (warm beige for better lighting visibility)
+                vertex.color = {0.9f, 0.7f, 0.5f};
 
+                // Deduplication: only add vertex if we haven't seen it before
                 if (uniqueVertices.count(vertex) == 0) {
                     uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
                     vertices.push_back(vertex);
                 }
 
+                // Add index pointing to the (possibly deduplicated) vertex
                 indices.push_back(uniqueVertices[vertex]);
             }
         }
@@ -693,34 +812,58 @@ private:
         modelVertexCount = vertices.size();
         modelTriangleCount = indices.size() / 3;
 
+        // Calculate and display loading statistics
         std::cout << "Model loaded in " << modelLoadTime << " ms" << std::endl;
         std::cout << "Vertices: " << modelVertexCount << std::endl;
         std::cout << "Triangles: " << modelTriangleCount << std::endl;
         std::cout << "Has normals: " << (attrib.normals.size() > 0 ? "Yes" : "No") << std::endl;
 
-        // If no normals, compute face normals
+        /**
+         * Automatic normal generation for models without normals
+         *
+         * Computes face normals using cross product:
+         * normal = normalize(cross(edge1, edge2))
+         *
+         * Note: This produces flat shading (all vertices of a triangle
+         * share the same normal). For smooth shading, we would need to
+         * average normals at shared vertices.
+         */
         if (attrib.normals.size() == 0) {
             std::cout << "Computing face normals..." << std::endl;
             for (size_t i = 0; i < indices.size(); i += 3) {
+                // Get the three vertices of this triangle
                 glm::vec3& v0 = vertices[indices[i]].pos;
                 glm::vec3& v1 = vertices[indices[i + 1]].pos;
                 glm::vec3& v2 = vertices[indices[i + 2]].pos;
 
+                // Compute face normal using cross product of two edges
+                // Cross product gives vector perpendicular to both edges
                 glm::vec3 normal = glm::normalize(glm::cross(v1 - v0, v2 - v0));
 
+                // Assign the same normal to all three vertices (flat shading)
                 vertices[indices[i]].normal = normal;
                 vertices[indices[i + 1]].normal = normal;
                 vertices[indices[i + 2]].normal = normal;
             }
         }
 
-        // Update window title with stats
+        // Display loading stats in window title for easy visibility
         std::string title = "Vulkan Model Viewer - Loaded in " + std::to_string(modelLoadTime) +
                            " ms | " + std::to_string(modelVertexCount) + " vertices | " +
                            std::to_string(modelTriangleCount) + " triangles";
         glfwSetWindowTitle(window, title.c_str());
     }
 
+    /**
+     * Upload vertex data to GPU using staging buffer pattern
+     *
+     * Two-stage upload for optimal performance:
+     * 1. CPU -> Staging buffer (host-visible memory)
+     * 2. Staging buffer -> Vertex buffer (device-local memory)
+     *
+     * Device-local memory is faster for GPU access but not CPU-accessible.
+     * Staging buffer allows CPU to write data, then GPU copies to fast memory.
+     */
     void createVertexBuffer() {
         VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
@@ -907,32 +1050,58 @@ private:
         }
     }
 
+    /**
+     * Update MVP matrices for camera animation
+     *
+     * Creates automatic camera rotation around the model:
+     * - Model matrix: Identity (model stays at origin)
+     * - View matrix: Camera orbits around origin
+     * - Projection matrix: Perspective projection (45° FOV)
+     *
+     * @param currentImage Index of current frame (for double buffering)
+     */
     void updateUniformBuffer(uint32_t currentImage) {
         static auto startTime = std::chrono::high_resolution_clock::now();
         auto currentTime = std::chrono::high_resolution_clock::now();
         float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
 
+        // Rotate camera 20 degrees per second
         cameraAngle = time * glm::radians(20.0f);
 
         UniformBufferObject ubo{};
-        ubo.model = glm::mat4(1.0f);
-        ubo.view = glm::lookAt(
-            glm::vec3(sin(cameraAngle) * cameraDistance, cameraDistance * 0.5f, cos(cameraAngle) * cameraDistance),
-            glm::vec3(0.0f, 0.0f, 0.0f),
-            glm::vec3(0.0f, 1.0f, 0.0f)
-        );
-        ubo.proj = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float) swapChainExtent.height, 0.1f, 100.0f);
-        ubo.proj[1][1] *= -1;
+        ubo.model = glm::mat4(1.0f);  // Identity: model doesn't move
 
+        // View matrix: camera orbits in a circle around the model
+        ubo.view = glm::lookAt(
+            glm::vec3(sin(cameraAngle) * cameraDistance, cameraDistance * 0.5f, cos(cameraAngle) * cameraDistance), // Eye position
+            glm::vec3(0.0f, 0.0f, 0.0f),  // Look at origin
+            glm::vec3(0.0f, 1.0f, 0.0f)   // Up vector
+        );
+
+        // Projection matrix: perspective projection
+        ubo.proj = glm::perspective(
+            glm::radians(45.0f),  // Field of view
+            swapChainExtent.width / (float) swapChainExtent.height,  // Aspect ratio
+            0.1f,   // Near clipping plane
+            100.0f  // Far clipping plane
+        );
+        ubo.proj[1][1] *= -1;  // Flip Y for Vulkan (GLM is for OpenGL)
+
+        // Copy to mapped uniform buffer (no need to map/unmap each frame)
         memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
     }
 
+    /**
+     * Main rendering loop
+     * Runs until user closes the window
+     * Process: Poll events -> Draw frame -> Repeat
+     */
     void mainLoop() {
         while (!glfwWindowShouldClose(window)) {
-            glfwPollEvents();
-            drawFrame();
+            glfwPollEvents();  // Handle window events (close, etc.)
+            drawFrame();       // Render one frame
         }
-        vkDeviceWaitIdle(device);
+        vkDeviceWaitIdle(device);  // Wait for GPU to finish before cleanup
     }
 
     void drawFrame() {
