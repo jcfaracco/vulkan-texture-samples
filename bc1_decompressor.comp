@@ -1,0 +1,81 @@
+#version 450
+
+// BC1/DXT1 GPU Decompression Shader
+// Decompresses BC1 compressed textures directly on GPU
+// This is the key to DirectStorage - GPU does decompression, not CPU!
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer CompressedData {
+    uint data[];
+} compressed;
+
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D outputImage;
+
+// BC1 block: 8 bytes = 2 x uint32
+// [0-1]: color0 (RGB565)
+// [2-3]: color1 (RGB565)  
+// [4-7]: 4x4 2-bit indices
+
+vec3 rgb565ToRgb(uint color565) {
+    float r = float((color565 >> 11) & 0x1F) / 31.0;
+    float g = float((color565 >> 5) & 0x3F) / 63.0;
+    float b = float(color565 & 0x1F) / 31.0;
+    return vec3(r, g, b);
+}
+
+void main() {
+    uvec2 blockCoord = gl_GlobalInvocationID.xy / 4;
+    uvec2 pixelInBlock = gl_GlobalInvocationID.xy % 4;
+    
+    ivec2 imageSize = imageSize(outputImage);
+    if (gl_GlobalInvocationID.x >= imageSize.x || gl_GlobalInvocationID.y >= imageSize.y) {
+        return;
+    }
+    
+    // Calculate block index (each block is 4x4 pixels)
+    uint blocksPerRow = (imageSize.x + 3) / 4;
+    uint blockIndex = blockCoord.y * blocksPerRow + blockCoord.x;
+    
+    // Each BC1 block is 2 uint32s (8 bytes)
+    uint blockOffset = blockIndex * 2;
+    
+    // Read BC1 block data
+    uint data0 = compressed.data[blockOffset];
+    uint data1 = compressed.data[blockOffset + 1];
+    
+    // Extract colors
+    uint color0_565 = data0 & 0xFFFF;
+    uint color1_565 = (data0 >> 16) & 0xFFFF;
+    
+    vec3 color0 = rgb565ToRgb(color0_565);
+    vec3 color1 = rgb565ToRgb(color1_565);
+    
+    // Build color palette
+    vec3 palette[4];
+    palette[0] = color0;
+    palette[1] = color1;
+    
+    if (color0_565 > color1_565) {
+        // 4-color mode
+        palette[2] = (2.0 * color0 + color1) / 3.0;
+        palette[3] = (color0 + 2.0 * color1) / 3.0;
+    } else {
+        // 3-color mode with transparency
+        palette[2] = (color0 + color1) / 2.0;
+        palette[3] = vec3(0.0); // Transparent black
+    }
+    
+    // Get 2-bit index for this pixel
+    uint pixelIndex = pixelInBlock.y * 4 + pixelInBlock.x;
+    uint bitOffset = pixelIndex * 2;
+    uint colorIndex = (data1 >> bitOffset) & 0x3;
+    
+    // Write decompressed pixel
+    vec4 outputColor = vec4(palette[colorIndex], 1.0);
+    if (color0_565 <= color1_565 && colorIndex == 3) {
+        outputColor.a = 0.0; // Transparent
+    }
+    
+    imageStore(outputImage, ivec2(gl_GlobalInvocationID.xy), outputColor);
+}
