@@ -143,6 +143,11 @@ private:
     float cameraDistance = 3.0f;
     float cameraAngle = 0.0f;
 
+    // Model loading stats
+    float modelLoadTime = 0.0f;
+    size_t modelVertexCount = 0;
+    size_t modelTriangleCount = 0;
+
 public:
     void run(const std::string& modelPath) {
         initWindow();
@@ -684,11 +689,19 @@ private:
         }
 
         auto endTime = std::chrono::high_resolution_clock::now();
-        float loadTime = std::chrono::duration<float, std::chrono::milliseconds::period>(endTime - startTime).count();
+        modelLoadTime = std::chrono::duration<float, std::chrono::milliseconds::period>(endTime - startTime).count();
+        modelVertexCount = vertices.size();
+        modelTriangleCount = indices.size() / 3;
 
-        std::cout << "Model loaded in " << loadTime << " ms" << std::endl;
-        std::cout << "Vertices: " << vertices.size() << std::endl;
-        std::cout << "Triangles: " << (indices.size() / 3) << std::endl;
+        std::cout << "Model loaded in " << modelLoadTime << " ms" << std::endl;
+        std::cout << "Vertices: " << modelVertexCount << std::endl;
+        std::cout << "Triangles: " << modelTriangleCount << std::endl;
+
+        // Update window title with stats
+        std::string title = "Vulkan Model Viewer - Loaded in " + std::to_string(modelLoadTime) +
+                           " ms | " + std::to_string(modelVertexCount) + " vertices | " +
+                           std::to_string(modelTriangleCount) + " triangles";
+        glfwSetWindowTitle(window, title.c_str());
     }
 
     void createVertexBuffer() {
