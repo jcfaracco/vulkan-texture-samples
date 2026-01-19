@@ -677,7 +677,7 @@ private:
                     vertex.normal = {0.0f, 1.0f, 0.0f};
                 }
 
-                vertex.color = {0.8f, 0.8f, 0.8f};
+                vertex.color = {0.9f, 0.7f, 0.5f}; // Warm beige color instead of gray
 
                 if (uniqueVertices.count(vertex) == 0) {
                     uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
@@ -696,6 +696,23 @@ private:
         std::cout << "Model loaded in " << modelLoadTime << " ms" << std::endl;
         std::cout << "Vertices: " << modelVertexCount << std::endl;
         std::cout << "Triangles: " << modelTriangleCount << std::endl;
+        std::cout << "Has normals: " << (attrib.normals.size() > 0 ? "Yes" : "No") << std::endl;
+
+        // If no normals, compute face normals
+        if (attrib.normals.size() == 0) {
+            std::cout << "Computing face normals..." << std::endl;
+            for (size_t i = 0; i < indices.size(); i += 3) {
+                glm::vec3& v0 = vertices[indices[i]].pos;
+                glm::vec3& v1 = vertices[indices[i + 1]].pos;
+                glm::vec3& v2 = vertices[indices[i + 2]].pos;
+
+                glm::vec3 normal = glm::normalize(glm::cross(v1 - v0, v2 - v0));
+
+                vertices[indices[i]].normal = normal;
+                vertices[indices[i + 1]].normal = normal;
+                vertices[indices[i + 2]].normal = normal;
+            }
+        }
 
         // Update window title with stats
         std::string title = "Vulkan Model Viewer - Loaded in " + std::to_string(modelLoadTime) +
