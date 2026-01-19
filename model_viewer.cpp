@@ -62,6 +62,15 @@ struct Vertex {
 };
 
 namespace std {
+    template<> struct hash<glm::vec3> {
+        size_t operator()(glm::vec3 const& vec) const {
+            size_t h1 = hash<float>()(vec.x);
+            size_t h2 = hash<float>()(vec.y);
+            size_t h3 = hash<float>()(vec.z);
+            return ((h1 ^ (h2 << 1)) >> 1) ^ (h3 << 1);
+        }
+    };
+
     template<> struct hash<Vertex> {
         size_t operator()(Vertex const& vertex) const {
             return ((hash<glm::vec3>()(vertex.pos) ^
@@ -506,7 +515,7 @@ private:
         depthStencil.stencilTestEnable = VK_FALSE;
 
         VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-        colorBlendAttachment.colorWriteMask = VK_COLOR_WRITE_MASK_R_BIT | VK_COLOR_WRITE_MASK_G_BIT | VK_COLOR_WRITE_MASK_B_BIT | VK_COLOR_WRITE_MASK_A_BIT;
+        colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
         colorBlendAttachment.blendEnable = VK_FALSE;
 
         VkPipelineColorBlendStateCreateInfo colorBlending{};
