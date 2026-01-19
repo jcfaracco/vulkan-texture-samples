@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include <set>
 #include <array>
+#include <algorithm>
 
 // Vulkan Model Viewer - Loads and displays large OBJ models like Stanford Lucy
 
@@ -284,6 +285,9 @@ private:
 
         uint32_t formatCount;
         vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, nullptr);
+        if (formatCount == 0) {
+            throw std::runtime_error("No surface formats available");
+        }
         std::vector<VkSurfaceFormatKHR> formats(formatCount);
         vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, formats.data());
 
@@ -295,7 +299,26 @@ private:
         }
 
         swapChainImageFormat = surfaceFormat.format;
-        swapChainExtent = capabilities.currentExtent;
+
+        // Choose swap extent
+        if (capabilities.currentExtent.width != UINT32_MAX) {
+            swapChainExtent = capabilities.currentExtent;
+        } else {
+            int width, height;
+            glfwGetFramebufferSize(window, &width, &height);
+
+            VkExtent2D actualExtent = {
+                static_cast<uint32_t>(width),
+                static_cast<uint32_t>(height)
+            };
+
+            actualExtent.width = std::max(capabilities.minImageExtent.width,
+                                         std::min(capabilities.maxImageExtent.width, actualExtent.width));
+            actualExtent.height = std::max(capabilities.minImageExtent.height,
+                                          std::min(capabilities.maxImageExtent.height, actualExtent.height));
+
+            swapChainExtent = actualExtent;
+        }
 
         uint32_t imageCount = capabilities.minImageCount + 1;
         if (capabilities.maxImageCount > 0 && imageCount > capabilities.maxImageCount) {
