@@ -759,17 +759,47 @@ private:
     void loadModel(const std::string& modelPath) {
         auto startTime = std::chrono::high_resolution_clock::now();
 
-        // Parse OBJ file
+        std::cout << "Loading model: " << modelPath << std::endl;
+
+        // ===== STEP 1: Measure pure file I/O (read entire file into memory) =====
+        auto ioStartTime = std::chrono::high_resolution_clock::now();
+
+        std::ifstream fileStream(modelPath, std::ios::ate | std::ios::binary);
+        if (!fileStream) {
+            throw std::runtime_error("Failed to open file: " + modelPath);
+        }
+
+        size_t fileSize = fileStream.tellg();
+        fileStream.seekg(0);
+
+        std::string fileContents;
+        fileContents.resize(fileSize);
+        fileStream.read(&fileContents[0], fileSize);
+        fileStream.close();
+
+        auto ioEndTime = std::chrono::high_resolution_clock::now();
+        float ioTime = std::chrono::duration<float, std::chrono::milliseconds::period>(ioEndTime - ioStartTime).count();
+
+        std::cout << "  [I/O] Read " << (fileSize / 1024.0 / 1024.0) << " MB in "
+                  << ioTime << " ms (" << (fileSize / 1024.0 / 1024.0) / (ioTime / 1000.0) << " MB/s)" << std::endl;
+
+        // ===== STEP 2: Measure parsing time =====
+        auto parseStartTime = std::chrono::high_resolution_clock::now();
+
         tinyobj::attrib_t attrib;
         std::vector<tinyobj::shape_t> shapes;
         std::vector<tinyobj::material_t> materials;
         std::string warn, err;
 
-        std::cout << "Loading model: " << modelPath << std::endl;
-
         if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, modelPath.c_str())) {
             throw std::runtime_error("Failed to load model: " + warn + err);
         }
+
+        auto parseEndTime = std::chrono::high_resolution_clock::now();
+        float parseTime = std::chrono::duration<float, std::chrono::milliseconds::period>(parseEndTime - parseStartTime).count();
+
+        std::cout << "  [PARSE] Parsed OBJ in " << parseTime << " ms" << std::endl;
+        std::cout << "  [ANALYSIS] Parsing is " << (parseTime / ioTime) << "x slower than I/O" << std::endl;
 
         // Hash map for vertex deduplication
         // Key: Vertex, Value: index in vertices array
