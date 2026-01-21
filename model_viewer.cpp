@@ -25,7 +25,7 @@
 #include <GLFW/glfw3.h>
 
 #define TINYOBJLOADER_IMPLEMENTATION
-#include <tiny_obj_loader.h>
+#include "tiny_obj_loader.h"
 
 #define GLM_FORCE_RADIANS          // Use radians for GLM functions
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE // Use Vulkan depth range [0, 1]
