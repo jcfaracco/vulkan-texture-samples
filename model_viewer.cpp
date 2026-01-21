@@ -42,6 +42,7 @@
 #include <set>
 #include <array>
 #include <algorithm>
+#include <limits>
 
 /**
  * Vertex structure representing a single point in the 3D model
@@ -223,8 +224,13 @@ private:
     const int HEIGHT = 768;                     // Window height
 
     // ==== Camera State ====
-    float cameraDistance = 3.0f;                // Distance from origin
-    float cameraAngle = 0.0f;                   // Rotation angle around model
+    float cameraDistance = 3.0f;                // Distance from origin (auto-adjusted based on model size)
+    float cameraAngle = 0.0f;                   // Rotation angle around model (fixed, no auto-rotation)
+
+    // ==== Model Bounds ====
+    glm::vec3 modelMin = glm::vec3(0.0f);       // Minimum bounds of model
+    glm::vec3 modelMax = glm::vec3(0.0f);       // Maximum bounds of model
+    glm::vec3 modelCenter = glm::vec3(0.0f);    // Center of model
 
     // ==== Performance Metrics ====
     float modelLoadTime = 0.0f;                 // Time to load model (ms)
@@ -769,6 +775,10 @@ private:
         // Key: Vertex, Value: index in vertices array
         std::unordered_map<Vertex, uint32_t> uniqueVertices{};
 
+        // Initialize bounding box with extreme values
+        modelMin = glm::vec3(std::numeric_limits<float>::max());
+        modelMax = glm::vec3(std::numeric_limits<float>::lowest());
+
         // Process all shapes and faces
         for (const auto& shape : shapes) {
             for (const auto& index : shape.mesh.indices) {
@@ -780,6 +790,10 @@ private:
                     attrib.vertices[3 * index.vertex_index + 1],
                     attrib.vertices[3 * index.vertex_index + 2]
                 };
+
+                // Update bounding box
+                modelMin = glm::min(modelMin, vertex.pos);
+                modelMax = glm::max(modelMax, vertex.pos);
 
                 // Extract normal if present
                 if (index.normal_index >= 0) {
@@ -846,6 +860,21 @@ private:
                 vertices[indices[i + 2]].normal = normal;
             }
         }
+
+        // Calculate model center and size for camera positioning
+        modelCenter = (modelMin + modelMax) * 0.5f;
+        glm::vec3 modelSize = modelMax - modelMin;
+        float maxDimension = glm::max(glm::max(modelSize.x, modelSize.y), modelSize.z);
+
+        // Set camera distance to fit entire model in view
+        // Use FOV of 45 degrees and add 20% margin
+        float fov = glm::radians(45.0f);
+        cameraDistance = (maxDimension * 0.5f) / glm::tan(fov * 0.5f) * 1.2f;
+
+        std::cout << "Model bounds: Min(" << modelMin.x << ", " << modelMin.y << ", " << modelMin.z << ") "
+                  << "Max(" << modelMax.x << ", " << modelMax.y << ", " << modelMax.z << ")" << std::endl;
+        std::cout << "Model center: (" << modelCenter.x << ", " << modelCenter.y << ", " << modelCenter.z << ")" << std::endl;
+        std::cout << "Camera distance set to: " << cameraDistance << std::endl;
 
         // Display loading stats in window title for easy visibility
         std::string title = "Vulkan Model Viewer - Loaded in " + std::to_string(modelLoadTime) +
@@ -1051,30 +1080,30 @@ private:
     }
 
     /**
-     * Update MVP matrices for camera animation
+     * Update MVP matrices for camera view
      *
-     * Creates automatic camera rotation around the model:
+     * Creates fixed camera view of the model:
      * - Model matrix: Identity (model stays at origin)
-     * - View matrix: Camera orbits around origin
+     * - View matrix: Camera positioned at fixed angle, looking at model center
      * - Projection matrix: Perspective projection (45° FOV)
      *
      * @param currentImage Index of current frame (for double buffering)
      */
     void updateUniformBuffer(uint32_t currentImage) {
-        static auto startTime = std::chrono::high_resolution_clock::now();
-        auto currentTime = std::chrono::high_resolution_clock::now();
-        float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
-
-        // Rotate camera 20 degrees per second
-        cameraAngle = time * glm::radians(20.0f);
+        // Camera is now fixed - rotation disabled
+        // If you want to enable rotation, uncomment the lines below:
+        // static auto startTime = std::chrono::high_resolution_clock::now();
+        // auto currentTime = std::chrono::high_resolution_clock::now();
+        // float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+        // cameraAngle = time * glm::radians(20.0f);
 
         UniformBufferObject ubo{};
         ubo.model = glm::mat4(1.0f);  // Identity: model doesn't move
 
-        // View matrix: camera orbits in a circle around the model
+        // View matrix: camera at fixed position, looking at model center
         ubo.view = glm::lookAt(
             glm::vec3(sin(cameraAngle) * cameraDistance, cameraDistance * 0.5f, cos(cameraAngle) * cameraDistance), // Eye position
-            glm::vec3(0.0f, 0.0f, 0.0f),  // Look at origin
+            modelCenter,  // Look at model center
             glm::vec3(0.0f, 1.0f, 0.0f)   // Up vector
         );
 
